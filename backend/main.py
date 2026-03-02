@@ -9,9 +9,11 @@ from typing import List
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 import tempfile
 import json
 import logging
+import asyncio
 from pathlib import Path
 
 env_path = Path(__file__).parent / ".env"
@@ -32,9 +34,10 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Allow CORS for local and production frontend
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").strip().rstrip("/")
 origins = [
     "http://localhost:3000",
+    "https://splitsnap-web.vercel.app",
     frontend_url
 ]
 
@@ -96,7 +99,7 @@ async def process_receipt(request: Request, file: UploadFile = File(...)):
         temp_file_path = temp_file.name
 
     try:
-        logger.info(f"Processing image {file.filename} with Gemini 1.5 Flash...")
+        logger.info(f"Processing image {file.filename} with Gemini...")
         
         # Upload the file to Gemini
         sample_file = client.files.upload(file=temp_file_path, config={'display_name': 'Receipt Image'})
@@ -116,14 +119,34 @@ async def process_receipt(request: Request, file: UploadFile = File(...)):
         Ignore any tip amount in the items list, but extract the tax and total accurately.
         """
         
-        result = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[sample_file, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ReceiptData,
-            ),
-        )
+        models_to_try = ['gemini-3-flash-preview','gemini-2.5-flash', 'gemini-2.5-flash-lite']
+        result = None
+        
+        for model_name in models_to_try:
+            try:
+                logger.info(f"Attempting to process with model: {model_name}")
+                result = client.models.generate_content(
+                    model=model_name,
+                    contents=[sample_file, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=ReceiptData,
+                    ),
+                )
+                break  # Success! Exit the fallback loop
+            except APIError as e:
+                # 429 means Quota Exceeded / Resource Exhausted
+                if e.code == 429:
+                    logger.warning(f"Quota exceeded for {model_name}. Waiting 2 seconds before trying next model...")
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    # Reraise other API errors (like bad requests, disabled APIs, etc.)
+                    raise
+                    
+        if not result:
+            # If we exhausted all models in the loop
+            raise HTTPException(status_code=429, detail="Gemini API quota exceeded across all available models. Please try again later.")
         
         # Clean up the file from Gemini
         client.files.delete(name=sample_file.name)
