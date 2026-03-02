@@ -11,7 +11,7 @@ Simply upload a photo of your receipt, and SplitSnap will digitize it. You can v
 ![Dependencies](https://img.shields.io/badge/Gemini-2.5_Flash-blue?logo=google)
 
 ### Link:
-[Link here when Deployed]
+https://splitsnap-web.vercel.app/
 
 ---
 
