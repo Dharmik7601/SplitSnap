@@ -23,10 +23,10 @@ def test_receipt_process_unsupported_file():
     file_content = b"fake text content"
     response = client.post(
         "/api/receipt/process",
-        files={"file": ("test.txt", io.BytesIO(file_content), "text/plain")}
+        files=[("files", ("test.txt", io.BytesIO(file_content), "text/plain"))]
     )
     assert response.status_code == 400
-    assert "File must be an image" in response.json()["detail"]
+    assert "All files must be images" in response.json()["detail"]
 
 # We mock out main.os.getenv and the Path.exists logic for the failure test
 def test_receipt_process_missing_api_key(monkeypatch):
@@ -46,7 +46,7 @@ def test_receipt_process_missing_api_key(monkeypatch):
     file_content = b"fake image content"
     response = client.post(
         "/api/receipt/process",
-        files={"file": ("test.jpg", io.BytesIO(file_content), "image/jpeg")}
+        files=[("files", ("test.jpg", io.BytesIO(file_content), "image/jpeg"))]
     )
     assert response.status_code == 500
     assert "Gemini API key is not configured" in response.json()["detail"]

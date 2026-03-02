@@ -9,11 +9,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ReceiptData, Item } from "@/types/api"
-import { calculateShares, SplitInstance } from "@/utils/calculations"
+import { calculateShares, SplitInstance, recalculateInclusivePrices } from "@/utils/calculations"
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const [previews, setPreviews] = useState<string[]>([])
 
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -32,27 +32,42 @@ export default function Home() {
   const curr = currencySymbols[currency] || "$"
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0]
-      setFile(selectedFile)
-      setError(null)
-
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setPreview(reader.result as string)
+    if (e.target.files && e.target.files.length > 0) {
+      if (e.target.files.length > 3) {
+        setError("You can only upload up to 3 images at a time.");
+        // clear any existing selections if they pick too many
+        setFiles([]);
+        setPreviews([]);
+        return;
       }
-      reader.readAsDataURL(selectedFile)
+      const selectedFiles = Array.from(e.target.files);
+      setFiles(selectedFiles);
+      setError(null);
+
+      const newPreviews: string[] = [];
+      selectedFiles.forEach(file => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          newPreviews.push(reader.result as string);
+          if (newPreviews.length === selectedFiles.length) {
+            setPreviews(newPreviews);
+          }
+        }
+        reader.readAsDataURL(file);
+      });
     }
   }
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
 
     setIsLoading(true)
     setError(null)
 
     const formData = new FormData()
-    formData.append("file", file)
+    files.forEach(file => {
+      formData.append("files", file)
+    });
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     try {
@@ -78,18 +93,19 @@ export default function Home() {
 
   const handleUpdateItem = (id: string, field: "name" | "price", value: string) => {
     if (!receiptData) return;
-    if (field === "name") setAssignError(null); // clear validation error on typing
+    if (field === "name") setAssignError(null);
 
     setReceiptData(prev => {
       if (!prev) return prev;
-      return {
+      const newData = {
         ...prev,
         items: prev.items.map(item =>
           item.id === id
             ? { ...item, [field]: field === "price" ? parseFloat(value) || 0 : value }
             : item
         )
-      }
+      };
+      return field === 'price' ? recalculateInclusivePrices(newData) : newData;
     })
   }
 
@@ -97,10 +113,10 @@ export default function Home() {
     if (!receiptData) return;
     setReceiptData(prev => {
       if (!prev) return prev;
-      return {
+      return recalculateInclusivePrices({
         ...prev,
         items: prev.items.filter(item => item.id !== id)
-      }
+      });
     })
   }
 
@@ -111,14 +127,71 @@ export default function Home() {
       if (!prev) return prev;
       return {
         ...prev,
-        items: [...prev.items, { id: `new-${Date.now()}`, name: "", price: 0 }]
+        items: [...prev.items, { id: `new-${Date.now()}`, name: "", price: 0, inclusive_price: 0, applied_taxes: [] }]
       }
     })
   }
 
-  const handleUpdateTax = (val: string) => {
+  const handleToggleItemTax = (itemId: string, taxName: string) => {
     if (!receiptData) return;
-    setReceiptData(prev => prev ? { ...prev, tax: parseFloat(val) || 0 } : prev);
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const newData = {
+        ...prev,
+        items: prev.items.map(item => {
+          if (item.id === itemId) {
+            const currentTaxes = item.applied_taxes || [];
+            const newTaxes = currentTaxes.includes(taxName)
+              ? currentTaxes.filter(t => t !== taxName)
+              : [...currentTaxes, taxName];
+            return { ...item, applied_taxes: newTaxes };
+          }
+          return item;
+        })
+      };
+      return recalculateInclusivePrices(newData);
+    });
+  }
+
+  const handleUpdateTax = (id: number, val: string) => {
+    if (!receiptData) return;
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const newTaxes = [...(prev.taxes || [])];
+      if (newTaxes[id]) {
+        newTaxes[id].amount = parseFloat(val) || 0;
+      }
+      return recalculateInclusivePrices({ ...prev, taxes: newTaxes });
+    });
+  }
+  const handleAddManualTax = () => {
+    if (!receiptData) return;
+    const customName = prompt("Enter a name for the new tax (e.g. 'City Tax'):");
+    if (!customName || customName.trim() === "") return;
+
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      // Prevent duplicates
+      if (prev.taxes?.some(t => t.name.toLowerCase() === customName.trim().toLowerCase())) return prev;
+
+      const newTaxes = [...(prev.taxes || []), { name: customName.trim(), amount: 0 }];
+      return recalculateInclusivePrices({ ...prev, taxes: newTaxes });
+    });
+  }
+
+  const handleDeleteTax = (index: number) => {
+    if (!receiptData) return;
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const targetTax = prev.taxes[index]?.name;
+      const newTaxes = prev.taxes.filter((_, i) => i !== index);
+      // Remove this tax from all items' applied_taxes to clean up seamlessly
+      const cleanedItems = prev.items.map(item => ({
+        ...item,
+        applied_taxes: item.applied_taxes?.filter(t => t !== targetTax) || []
+      }));
+      return recalculateInclusivePrices({ ...prev, taxes: newTaxes, items: cleanedItems });
+    });
   }
 
   const handleAddInstance = () => {
@@ -166,7 +239,7 @@ export default function Home() {
 
   if (receiptData) {
     const calculatedSubtotal = receiptData.items.reduce((sum, item) => sum + item.price, 0);
-    const calculatedTotal = calculatedSubtotal + receiptData.tax;
+    const calculatedTotal = calculatedSubtotal + (receiptData.taxes?.reduce((sum, t) => sum + t.amount, 0) || 0);
     const difference = Math.abs(calculatedTotal - receiptData.scraped_total);
     const isMatched = difference < 0.05; // tiny tolerance for float math
 
@@ -178,8 +251,8 @@ export default function Home() {
       const unassignedItems = receiptData.items.filter(item => !allAssignedItemIds.has(item.id));
 
       return (
-        <div className="container mx-auto max-w-5xl px-4 py-8 md:py-16 fade-in">
-          <div className="flex justify-between items-center mb-6">
+        <div className="w-full px-4 md:px-8 py-8 md:py-16 fade-in">
+          <div className="flex justify-between items-center mb-6 max-w-[2000px] mx-auto">
             <h1 className="text-3xl font-extrabold text-primary tracking-tight">Assign Items</h1>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setIsAssigning(false)}>
@@ -188,7 +261,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto">
             {/* Left Column: People/Instances */}
             <div className="lg:col-span-1 space-y-4">
               <Card className="shadow-sm">
@@ -228,46 +301,55 @@ export default function Home() {
                   <CardTitle className="text-xl">Bill Items</CardTitle>
                   <CardDescription>Tap an item to assign it to people. Multiple selections perfectly split the cost.</CardDescription>
                 </CardHeader>
-                <CardContent className="p-0 max-h-[50vh] overflow-auto">
-                  <Table>
-                    <TableHeader className="sticky top-0 bg-background z-10">
-                      <TableRow>
-                        <TableHead>Item Name</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
-                        <TableHead className="text-center">Assigned To</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {receiptData.items.map((item) => {
-                        const assignedTo = instances.filter(i => i.itemIds.includes(item.id));
-                        return (
-                          <TableRow key={item.id}>
-                            <TableCell className="font-medium">{item.name}</TableCell>
-                            <TableCell className="text-right">{curr}{item.price.toFixed(2)}</TableCell>
-                            <TableCell>
-                              <div className="flex gap-2 flex-wrap justify-center">
-                                {instances.map(inst => {
-                                  const isSelected = inst.itemIds.includes(item.id);
-                                  return (
-                                    <button
-                                      key={inst.id}
-                                      onClick={() => toggleItemAssignment(inst.id, item.id)}
-                                      className={`text-xs px-2 py-1 rounded-full border transition-all ${isSelected
-                                        ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                                        : 'bg-background text-muted-foreground border-input hover:border-primary/50 hover:bg-primary/10'
-                                        }`}
-                                    >
-                                      {inst.name.split(' ')[0]}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
+                <CardContent className="p-0 max-h-[50vh] overflow-y-auto">
+                  <div className="overflow-x-auto w-full pb-2">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-background z-10 w-full min-w-[500px]">
+                        <TableRow>
+                          <TableHead>Item Name</TableHead>
+                          <TableHead className="text-right">Price</TableHead>
+                          <TableHead className="text-center">Assigned To</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {receiptData.items.map((item) => {
+                          const assignedTo = instances.filter(i => i.itemIds.includes(item.id));
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell className="font-medium">{item.name}</TableCell>
+                              <TableCell className="text-right">
+                                <span className="font-medium">{curr}{item.price.toFixed(2)}</span>
+                                {item.inclusive_price > item.price && (
+                                  <div className="text-xs text-muted-foreground mt-0.5">
+                                    w/ tax: {curr}{item.inclusive_price.toFixed(2)}
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex gap-2 flex-wrap justify-center">
+                                  {instances.map(inst => {
+                                    const isSelected = inst.itemIds.includes(item.id);
+                                    return (
+                                      <button
+                                        key={inst.id}
+                                        onClick={() => toggleItemAssignment(inst.id, item.id)}
+                                        className={`text-xs px-2 py-1 rounded-full border transition-all ${isSelected
+                                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                                          : 'bg-background text-muted-foreground border-input hover:border-primary/50 hover:bg-primary/10'
+                                          }`}
+                                      >
+                                        {inst.name.split(' ')[0]}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -307,73 +389,95 @@ export default function Home() {
     }
 
     return (
-      <div className="container mx-auto max-w-4xl px-4 py-8 md:py-16 fade-in">
-        <div className="flex justify-between items-center mb-6">
+      <div className="w-full px-4 md:px-8 py-8 md:py-16 fade-in">
+        <div className="flex justify-between items-center mb-6 max-w-[2000px] mx-auto">
           <h1 className="text-3xl font-extrabold text-primary tracking-tight">Review Items</h1>
           <Button variant="secondary" size="sm" onClick={() => setReceiptData(null)}>
             <RefreshCcw className="mr-2 h-4 w-4" /> Start Over
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-6 max-w-[2000px] mx-auto">
+          <div className="lg:col-span-2 xl:col-span-3 space-y-4">
             <Card className="shadow-sm">
               <CardHeader className="p-4 border-b bg-muted/30 flex flex-col items-start w-full">
                 <CardTitle className="text-xl">Receipt Details</CardTitle>
                 <CardDescription>Edit names, fix prices, or remove incorrect items.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[60%]">Item Name</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead className="w-[50px]"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {receiptData.items.map((item) => (
-                      <TableRow key={item.id} className="group transition-all">
-                        <TableCell className="p-3">
-                          <Input
-                            value={item.name}
-                            onChange={(e) => handleUpdateItem(item.id, "name", e.target.value)}
-                            className="h-8 shadow-none focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
-                          />
-                        </TableCell>
-                        <TableCell className="p-3">
-                          <div className="flex items-center justify-end">
-                            <span className="text-xs text-muted-foreground mr-1">{curr}</span>
+                <div className="overflow-x-auto w-full pb-2">
+                  <Table className="min-w-[600px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[60%]">Item Name</TableHead>
+                        <TableHead className="text-right">Price</TableHead>
+                        <TableHead className="w-[50px]"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {receiptData.items.map((item) => (
+                        <TableRow key={item.id} className="group transition-all">
+                          <TableCell className="p-3">
                             <Input
-                              type="number"
-                              step="0.01"
-                              value={item.price || ""}
-                              onChange={(e) => handleUpdateItem(item.id, "price", e.target.value)}
-                              className="h-8 shadow-none text-right w-24 focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
+                              value={item.name}
+                              onChange={(e) => handleUpdateItem(item.id, "name", e.target.value)}
+                              className="h-8 shadow-none font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
                             />
-                          </div>
-                        </TableCell>
-                        <TableCell className="p-3 text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={() => handleDeleteItem(item.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
+                            <div className="px-3 pb-2 flex flex-wrap gap-2 items-center mt-2">
+                              <span className="text-xs font-semibold text-muted-foreground mr-1">Taxes:</span>
+                              {item.applied_taxes?.map(tax => (
+                                <button key={tax} onClick={() => handleToggleItemTax(item.id, tax)} className="px-2 py-1 rounded text-xs bg-primary/20 text-primary font-bold hover:bg-destructive/20 hover:text-destructive hover:line-through shadow-sm transition-all">
+                                  {tax}
+                                </button>
+                              ))}
+                              {receiptData.taxes?.filter(t => !item.applied_taxes?.includes(t.name)).map(tax => (
+                                <button key={tax.name} onClick={() => handleToggleItemTax(item.id, tax.name)} className="px-2 py-1 rounded text-xs bg-secondary/10 text-secondary font-medium border border-secondary/20 hover:bg-secondary/30 transition-all">
+                                  + {tax.name}
+                                </button>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="p-3 align-top pt-4 w-32">
+                            <div className="flex flex-col items-end">
+                              <div className="flex items-center justify-end w-full">
+                                <span className="text-sm text-muted-foreground mr-1">{curr}</span>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={item.price || ""}
+                                  onChange={(e) => handleUpdateItem(item.id, "price", e.target.value)}
+                                  className="h-9 shadow-none text-right w-full font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
+                                />
+                              </div>
+                              {item.inclusive_price > item.price && (
+                                <div className="text-xs text-muted-foreground pr-3 mt-1 font-semibold flex items-center bg-secondary/10 px-2 py-0.5 rounded">
+                                  Incl: {curr}{item.inclusive_price.toFixed(2)}
+                                </div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="p-3 text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              onClick={() => handleDeleteItem(item.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow>
+                        <TableCell colSpan={3} className="p-2 text-center">
+                          <Button variant="ghost" size="sm" onClick={handleAddBlankItem} className="text-secondary hover:text-secondary hover:bg-secondary/10 w-full border border-dashed border-secondary/50">
+                            + Add Item
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))}
-                    <TableRow>
-                      <TableCell colSpan={3} className="p-2 text-center">
-                        <Button variant="ghost" size="sm" onClick={handleAddBlankItem} className="text-secondary hover:text-secondary hover:bg-secondary/10 w-full border border-dashed border-secondary/50">
-                          + Add Item
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
+                    </TableBody>
+                  </Table>
+                </div>
               </CardContent>
               <CardFooter className="bg-muted/30 border-t p-4 flex justify-between items-center rounded-b-xl">
                 <div className="text-sm font-medium text-muted-foreground">Subtotal</div>
@@ -388,18 +492,32 @@ export default function Home() {
                 <CardTitle className="text-lg">Calculations</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Tax Amount</Label>
-                  <div className="flex items-center">
-                    <span className="text-sm font-semibold mr-2">{curr}</span>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={receiptData.tax || ""}
-                      onChange={(e) => handleUpdateTax(e.target.value)}
-                      className="h-9"
-                    />
-                  </div>
+                <div className="space-y-3">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Taxes Applied</Label>
+                  {receiptData.taxes && receiptData.taxes.map((tax, idx) => (
+                    <div key={idx} className="flex justify-between items-center bg-muted/20 p-2 rounded-md border gap-2">
+                      <span className="text-sm font-medium truncate flex-1">{tax.name}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="text-sm font-semibold">{curr}</span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={tax.amount || ""}
+                          onChange={(e) => handleUpdateTax(idx, e.target.value)}
+                          className="h-7 w-20 text-right bg-background border-input shadow-sm"
+                        />
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteTax(idx)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {(!receiptData.taxes || receiptData.taxes.length === 0) && (
+                    <div className="text-sm text-muted-foreground">No taxes detected.</div>
+                  )}
+                  <Button variant="outline" size="sm" onClick={handleAddManualTax} className="w-full mt-2 text-xs border-dashed">
+                    + Add New Tax
+                  </Button>
                 </div>
 
                 <div className="flex justify-between items-center pt-2 border-t">
@@ -485,17 +603,20 @@ export default function Home() {
               {error}
             </div>
           )}
-          {preview ? (
-            <div className="relative w-full max-w-sm rounded-xl overflow-hidden shadow-lg border">
-              <img src={preview} alt="Receipt Preview" className="w-full h-auto max-h-[60vh] object-cover" />
+          {previews.length > 0 ? (
+            <div className="relative w-full max-w-sm rounded-xl overflow-hidden shadow-lg border flex flex-col items-center justify-center p-2 gap-2 bg-muted/10">
+              <div className="flex flex-wrap gap-2 justify-center w-full max-h-[60vh] overflow-auto">
+                {previews.map((p, i) => (
+                  <img key={i} src={p} alt={`Receipt Preview ${i + 1}`} className="w-full h-auto object-cover rounded shadow-sm border max-w-[45%]" />
+                ))}
+              </div>
               {!isLoading && (
                 <Button
                   variant="destructive"
-                  size="sm"
-                  className="absolute top-2 right-2"
-                  onClick={() => { setFile(null); setPreview(null); setError(null); }}
+                  className="w-full mt-2"
+                  onClick={() => { setFiles([]); setPreviews([]); setError(null); }}
                 >
-                  Clear
+                  Clear Files
                 </Button>
               )}
               {isLoading && (
@@ -511,11 +632,12 @@ export default function Home() {
             <div className="flex h-56 w-full max-w-sm flex-col items-center justify-center rounded-xl border border-dashed border-primary/50 bg-primary/5 px-4 text-center transition-all hover:bg-primary/10">
               <UploadCloud className="mb-4 h-12 w-12 text-primary" />
               <Label htmlFor="receipt-upload" className="cursor-pointer text-sm font-semibold hover:underline">
-                Click to browse
+                Click to browse (Up to 3 images)
                 <Input
                   id="receipt-upload"
                   type="file"
                   accept="image/*"
+                  multiple
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -524,13 +646,13 @@ export default function Home() {
             </div>
           )}
         </CardContent>
-        {preview && (
+        {previews.length > 0 && (
           <CardFooter className="flex flex-col sm:flex-row justify-between items-center bg-muted/30 p-4 rounded-b-xl border-t gap-4">
             {/* File Truncation box */}
             <div className="flex items-center gap-2 text-sm font-medium text-foreground min-w-0 max-w-full sm:max-w-[15rem]">
               <FileText className="h-4 w-4 shrink-0 text-secondary" />
-              <div className="truncate px-1" title={file?.name}>
-                {file?.name}
+              <div className="truncate px-1" title={files.map(f => f.name).join(', ')}>
+                {files.length} images selected
               </div>
             </div>
             <Button onClick={handleUpload} disabled={isLoading} variant="secondary" className="group transition-all w-full sm:w-auto shrink-0">
@@ -545,7 +667,7 @@ export default function Home() {
         )}
       </Card>
 
-      {!preview && (
+      {!previews.length && (
         <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
           <div className="p-4 rounded-xl bg-card border shadow-sm flex flex-col items-center transition-all hover:border-primary/50">
             <div className="h-12 w-12 rounded-full bg-primary/20 flex items-center justify-center mb-4 text-xl font-bold text-primary">1</div>
