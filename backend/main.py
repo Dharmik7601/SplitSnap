@@ -132,7 +132,7 @@ async def process_receipt(request: Request, files: List[UploadFile] = File(...))
         Look for tax indicator codes (e.g. 'A', 'B', 'T') next to items, match them to the tax summaries at the bottom, and apply them. Calculate the `inclusive_price` (Base Price + Specific Applied Taxes). If no tax is explicitly indicated for an item, but there is a general tax, apply it if it makes sense contextually or leave empty. Return a strict list of applied taxes per item.
         """
         
-        models_to_try = ['gemini-3-flash-preview','gemini-2.5-flash', 'gemini-2.5-flash-lite']
+        models_to_try = ['gemini-3.1-flash-lite-preview']
         result = None
         
         for model_name in models_to_try:
