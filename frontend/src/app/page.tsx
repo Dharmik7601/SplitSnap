@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { UploadCloud, FileText, ChevronRight, Loader2, RefreshCcw, Trash2, ArrowRight, AlertTriangle, CheckCircle2 } from "lucide-react"
+import { UploadCloud, FileText, ChevronRight, Loader2, RefreshCcw, Trash2, ArrowRight, AlertTriangle, CheckCircle2, Copy, Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ReceiptData, Item } from "@/types/api"
-import { calculateShares, SplitInstance, recalculateInclusivePrices } from "@/utils/calculations"
+import { calculateShares, SplitInstance, recalculateInclusivePrices, ShareResult } from "@/utils/calculations"
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([])
@@ -26,6 +26,8 @@ export default function Home() {
   ])
   const [newInstanceName, setNewInstanceName] = useState("")
   const [assignError, setAssignError] = useState<string | null>(null)
+  const [copiedShareId, setCopiedShareId] = useState<string | null>(null)
+  const [copiedAll, setCopiedAll] = useState(false)
 
   const [currency, setCurrency] = useState("USD")
   const currencySymbols: Record<string, string> = { USD: "$", INR: "₹", EUR: "€" }
@@ -223,6 +225,57 @@ export default function Home() {
     }))
   }
 
+  const handleCopyShare = (share: ShareResult) => {
+    let text = `${share.name}'s Share:\n`;
+    text += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax: ${curr}${share.taxOwed.toFixed(2)}\n`;
+    text += `Total: ${curr}${share.totalOwed.toFixed(2)}\n\n`;
+    
+    if (share.itemsBreakdown && share.itemsBreakdown.length > 0) {
+      text += `Items:\n`;
+      share.itemsBreakdown.forEach(item => {
+        text += `- ${item.name}`;
+        if (item.sharedCount > 1) {
+           text += ` (1/${item.sharedCount} share)`;
+        }
+        text += `: ${curr}${item.totalOwed.toFixed(2)}\n`;
+      });
+    }
+
+    navigator.clipboard.writeText(text);
+    setCopiedShareId(share.id);
+    setTimeout(() => {
+      setCopiedShareId(null);
+    }, 2000);
+  }
+
+  const handleCopyAllShares = (shares: ShareResult[]) => {
+    let fullText = "Bill Split Summary\n===================\n\n";
+    
+    shares.forEach(share => {
+      fullText += `${share.name}'s Share:\n`;
+      fullText += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax: ${curr}${share.taxOwed.toFixed(2)}\n`;
+      fullText += `Total: ${curr}${share.totalOwed.toFixed(2)}\n`;
+      
+      if (share.itemsBreakdown && share.itemsBreakdown.length > 0) {
+        fullText += `Items:\n`;
+        share.itemsBreakdown.forEach(item => {
+          fullText += `- ${item.name}`;
+          if (item.sharedCount > 1) {
+             fullText += ` (1/${item.sharedCount})`;
+          }
+          fullText += `: ${curr}${item.totalOwed.toFixed(2)}\n`;
+        });
+      }
+      fullText += "\n-------------------\n\n";
+    });
+
+    navigator.clipboard.writeText(fullText.trim());
+    setCopiedAll(true);
+    setTimeout(() => {
+      setCopiedAll(false);
+    }, 2000);
+  }
+
   const handleProceedToAssign = () => {
     if (!receiptData) return;
 
@@ -255,7 +308,11 @@ export default function Home() {
           <div className="flex justify-between items-center mb-6 max-w-[2000px] mx-auto">
             <h1 className="text-3xl font-extrabold text-primary tracking-tight">Assign Items</h1>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setIsAssigning(false)}>
+              <Button onClick={() => handleCopyAllShares(shares)} className="gap-2">
+                {copiedAll ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copiedAll ? "Copied All!" : "Copy Summary"}
+              </Button>
+              <Button variant="outline" onClick={() => setIsAssigning(false)}>
                 <ChevronRight className="mr-2 h-4 w-4 rotate-180" /> Back to Edit
               </Button>
             </div>
@@ -356,10 +413,21 @@ export default function Home() {
               {/* Final Summary Section */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                 {shares.map(share => (
-                  <Card key={share.id} className={`border-l-4 ${share.id === 'payer' ? 'border-l-secondary' : 'border-l-primary'} shadow-sm`}>
-                    <div className="p-4 flex justify-between items-center">
+                  <Card key={share.id} className={`border-l-4 ${share.id === 'payer' ? 'border-l-secondary' : 'border-l-primary'} shadow-sm flex flex-col overflow-hidden`}>
+                    <div className="p-4 flex justify-between items-center bg-background z-10">
                       <div>
-                        <h3 className="font-bold text-lg">{share.name}</h3>
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                          {share.name}
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6 text-muted-foreground hover:text-primary transition-colors" 
+                            onClick={() => handleCopyShare(share)}
+                            title="Copy to clipboard"
+                          >
+                            {copiedShareId === share.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                          </Button>
+                        </h3>
                         <p className="text-xs text-muted-foreground">
                           Subtotal: {curr}{share.subtotalOwed.toFixed(2)} + Tax: {curr}{share.taxOwed.toFixed(2)}
                         </p>
@@ -369,6 +437,28 @@ export default function Home() {
                         {share.totalOwed.toFixed(2)}
                       </div>
                     </div>
+                    {share.itemsBreakdown && share.itemsBreakdown.length > 0 && (
+                      <div className="p-4 bg-muted/30 border-t text-sm space-y-2 flex-1">
+                        <h4 className="font-semibold text-[10px] tracking-wider uppercase text-muted-foreground mb-3">Item Breakdown</h4>
+                        <div className="space-y-1.5">
+                          {share.itemsBreakdown.map(item => (
+                            <div key={item.id} className="flex justify-between items-start">
+                              <span className="text-muted-foreground pr-2 text-xs font-medium leading-tight">
+                                {item.name} 
+                                {item.sharedCount > 1 && (
+                                  <span className="text-[9px] bg-primary/10 text-primary border border-primary/20 px-1 py-0.5 rounded ml-1.5 font-bold tracking-tight inline-block translate-y-[-1px]">
+                                    1/{item.sharedCount} share
+                                  </span>
+                                )}
+                              </span>
+                              <span className="font-semibold text-xs tabular-nums shrink-0">
+                                {curr}{item.totalOwed.toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </Card>
                 ))}
               </div>

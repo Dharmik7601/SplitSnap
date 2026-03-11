@@ -6,7 +6,17 @@ export interface SplitInstance {
     itemIds: string[]; // which items they are helping to pay for
 }
 
+export interface SharedItemBreakdown {
+    id: string;
+    name: string;
+    fraction: number;
+    sharedCount: number;
+    subtotalOwed: number;
+    totalOwed: number;
+}
+
 export interface ShareResult extends SplitInstance {
+    itemsBreakdown: SharedItemBreakdown[];
     subtotalOwed: number;
     taxOwed: number;
     totalOwed: number;
@@ -18,18 +28,32 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
     return instances.map(inst => {
         let instanceSubtotal = 0;
         let instanceTotal = 0;
+        const itemsBreakdown: SharedItemBreakdown[] = [];
 
         inst.itemIds.forEach(itemId => {
             const item = receiptData.items.find((i: Item) => i.id === itemId);
             if (item) {
                 // Find how many people share this item
                 const sharedCount = instances.filter(i => i.itemIds.includes(itemId)).length;
+                const fraction = 1 / (sharedCount || 1);
+                
+                const itemSubtotal = item.price * fraction;
+                const itemTotal = (item.inclusive_price || item.price) * fraction;
 
                 // Add the strict fraction of base price
-                instanceSubtotal += (item.price / (sharedCount || 1));
+                instanceSubtotal += itemSubtotal;
 
                 // Add the strict fraction of the inclusive price
-                instanceTotal += ((item.inclusive_price || item.price) / (sharedCount || 1));
+                instanceTotal += itemTotal;
+
+                itemsBreakdown.push({
+                    id: item.id,
+                    name: item.name,
+                    fraction,
+                    sharedCount,
+                    subtotalOwed: itemSubtotal,
+                    totalOwed: itemTotal
+                });
             }
         });
 
@@ -37,6 +61,7 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
 
         return {
             ...inst,
+            itemsBreakdown,
             subtotalOwed: instanceSubtotal,
             taxOwed: Math.max(0, instanceTax),
             totalOwed: instanceTotal
