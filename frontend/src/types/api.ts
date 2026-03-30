@@ -6,6 +6,8 @@ export interface Tax {
 export interface Item {
     id: string
     name: string
+    quantity: number
+    unit_price: number
     price: number
     inclusive_price: number
     applied_taxes: string[]

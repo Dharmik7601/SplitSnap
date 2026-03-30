@@ -56,8 +56,10 @@ class Tax(BaseModel):
 class Item(BaseModel):
     id: str = Field(description="A unique string identifier for the item (e.g. '1', '2')", default="")
     name: str = Field(description="The name of the item on the receipt", default="")
-    price: float = Field(description="The pre-tax original price of the item as a float", default=0.0)
-    inclusive_price: float = Field(description="The final price of the item including its specific applied taxes", default=0.0)
+    quantity: int = Field(description="The quantity explicitly listed. If not listed, assume 1.", default=1)
+    unit_price: float = Field(description="The price of a single unit of this item.", default=0.0)
+    price: float = Field(description="The total pre-tax original price of the item line (quantity * unit_price)", default=0.0)
+    inclusive_price: float = Field(description="The final price of the item line including its specific applied taxes", default=0.0)
     applied_taxes: List[str] = Field(description="List of tax names/codes applied to this item", default_factory=list)
 
 class ReceiptData(BaseModel):
@@ -128,6 +130,7 @@ async def process_receipt(request: Request, files: List[UploadFile] = File(...))
         If it IS a valid receipt (potentially spanning multiple images):
         Analyze the images combined and extract the requested information exactly.
         If the receipt uses cryptic abbreviations for items (common in supermarkets like Walmart or Costco), decode the product's actual name to the best of your ability and append it in brackets. Example: "GTD ORG [Gatorade Orange]".
+        Strictly extract the `quantity` of each item. If not explicitly listed, assume it is 1. Extract the `unit_price` of a single item. The total `price` MUST EXACTLY equal (`quantity` * `unit_price`).
         Ignore any tip amount in the items list, but extract the taxes and total accurately.
         Look for tax indicator codes (e.g. 'A', 'B', 'T') next to items, match them to the tax summaries at the bottom, and apply them. Calculate the `inclusive_price` (Base Price + Specific Applied Taxes). If no tax is explicitly indicated for an item, but there is a general tax, apply it if it makes sense contextually or leave empty. Return a strict list of applied taxes per item.
         """

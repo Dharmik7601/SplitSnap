@@ -3,13 +3,14 @@ import { ReceiptData, Item } from "@/types/api"
 export interface SplitInstance {
     id: string;
     name: string;
-    itemIds: string[]; // which items they are helping to pay for
+    itemIds: Record<string, number>; // itemId -> claimed quantity (allows fractional or multi-item splits)
 }
 
 export interface SharedItemBreakdown {
     id: string;
     name: string;
     fraction: number;
+    claimedCount: number;
     sharedCount: number;
     subtotalOwed: number;
     totalOwed: number;
@@ -30,12 +31,18 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
         let instanceTotal = 0;
         const itemsBreakdown: SharedItemBreakdown[] = [];
 
-        inst.itemIds.forEach(itemId => {
+        Object.keys(inst.itemIds).forEach(itemId => {
+            const claimedQuantity = inst.itemIds[itemId];
+            if (claimedQuantity <= 0) return;
+
             const item = receiptData.items.find((i: Item) => i.id === itemId);
             if (item) {
-                // Find how many people share this item
-                const sharedCount = instances.filter(i => i.itemIds.includes(itemId)).length;
-                const fraction = 1 / (sharedCount || 1);
+                // Find how many total pieces/shares of this item are claimed mathematically across all instances
+                const totalClaimedQuantity = instances.reduce((sum, currentInst) => {
+                    return sum + (currentInst.itemIds[itemId] || 0);
+                }, 0);
+
+                const fraction = claimedQuantity / (totalClaimedQuantity || 1);
                 
                 const itemSubtotal = item.price * fraction;
                 const itemTotal = (item.inclusive_price || item.price) * fraction;
@@ -50,7 +57,8 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
                     id: item.id,
                     name: item.name,
                     fraction,
-                    sharedCount,
+                    claimedCount: claimedQuantity,
+                    sharedCount: totalClaimedQuantity,
                     subtotalOwed: itemSubtotal,
                     totalOwed: itemTotal
                 });

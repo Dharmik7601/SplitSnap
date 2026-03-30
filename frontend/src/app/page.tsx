@@ -22,7 +22,7 @@ export default function Home() {
   // Step 3 state
   const [isAssigning, setIsAssigning] = useState(false)
   const [instances, setInstances] = useState<SplitInstance[]>([
-    { id: "payer", name: "Payer (You)", itemIds: [] } // default instance
+    { id: "payer", name: "Payer (You)", itemIds: {} } // default instance
   ])
   const [newInstanceName, setNewInstanceName] = useState("")
   const [assignError, setAssignError] = useState<string | null>(null)
@@ -93,7 +93,7 @@ export default function Home() {
     }
   }
 
-  const handleUpdateItem = (id: string, field: "name" | "price", value: string) => {
+  const handleUpdateItem = (id: string, field: "name" | "price" | "quantity" | "unit_price", value: string) => {
     if (!receiptData) return;
     if (field === "name") setAssignError(null);
 
@@ -101,13 +101,25 @@ export default function Home() {
       if (!prev) return prev;
       const newData = {
         ...prev,
-        items: prev.items.map(item =>
-          item.id === id
-            ? { ...item, [field]: field === "price" ? parseFloat(value) || 0 : value }
-            : item
-        )
+        items: prev.items.map(item => {
+          if (item.id === id) {
+             const updated = { ...item };
+             if (field === "name") {
+                updated.name = value;
+             } else {
+                const numVal = parseFloat(value) || 0;
+                updated[field] = numVal;
+                // Auto sync
+                if (field === "quantity" || field === "unit_price") {
+                    updated.price = updated.quantity * updated.unit_price;
+                }
+             }
+             return updated;
+          }
+          return item;
+        })
       };
-      return field === 'price' ? recalculateInclusivePrices(newData) : newData;
+      return (field !== 'name') ? recalculateInclusivePrices(newData) : newData;
     })
   }
 
@@ -129,7 +141,7 @@ export default function Home() {
       if (!prev) return prev;
       return {
         ...prev,
-        items: [...prev.items, { id: `new-${Date.now()}`, name: "", price: 0, inclusive_price: 0, applied_taxes: [] }]
+        items: [...prev.items, { id: `new-${Date.now()}`, name: "", quantity: 1, unit_price: 0, price: 0, inclusive_price: 0, applied_taxes: [] }]
       }
     })
   }
@@ -200,7 +212,7 @@ export default function Home() {
     if (!newInstanceName.trim()) return;
     setInstances(prev => [
       ...prev,
-      { id: Math.random().toString(36).substr(2, 9), name: newInstanceName.trim(), itemIds: [] }
+      { id: Math.random().toString(36).substr(2, 9), name: newInstanceName.trim(), itemIds: {} }
     ])
     setNewInstanceName("")
   }
@@ -210,16 +222,20 @@ export default function Home() {
     setInstances(prev => prev.filter(i => i.id !== id))
   }
 
-  const toggleItemAssignment = (instanceId: string, itemId: string) => {
+  const updateItemAssignment = (instanceId: string, itemId: string, delta: number) => {
     setInstances(prev => prev.map(inst => {
       if (inst.id === instanceId) {
-        const hasItem = inst.itemIds.includes(itemId);
-        return {
-          ...inst,
-          itemIds: hasItem
-            ? inst.itemIds.filter(id => id !== itemId)
-            : [...inst.itemIds, itemId]
+        const currentQty = inst.itemIds[itemId] || 0;
+        const newQty = Math.max(0, currentQty + delta);
+        
+        const newItems = { ...inst.itemIds };
+        if (newQty === 0) {
+           delete newItems[itemId];
+        } else {
+           newItems[itemId] = newQty;
         }
+
+        return { ...inst, itemIds: newItems };
       }
       return inst;
     }))
@@ -234,8 +250,10 @@ export default function Home() {
       text += `Items:\n`;
       share.itemsBreakdown.forEach(item => {
         text += `- ${item.name}`;
-        if (item.sharedCount > 1) {
-           text += ` (1/${item.sharedCount} share)`;
+        if (item.sharedCount > 1 && item.claimedCount < item.sharedCount) {
+           text += ` (${item.claimedCount}/${item.sharedCount} share)`;
+        } else if (item.claimedCount > 1) {
+           text += ` (Qty: ${item.claimedCount})`;
         }
         text += `: ${curr}${item.totalOwed.toFixed(2)}\n`;
       });
@@ -260,8 +278,10 @@ export default function Home() {
         fullText += `Items:\n`;
         share.itemsBreakdown.forEach(item => {
           fullText += `- ${item.name}`;
-          if (item.sharedCount > 1) {
-             fullText += ` (1/${item.sharedCount})`;
+          if (item.sharedCount > 1 && item.claimedCount < item.sharedCount) {
+             fullText += ` (${item.claimedCount}/${item.sharedCount} share)`;
+          } else if (item.claimedCount > 1) {
+             fullText += ` (Qty: ${item.claimedCount})`;
           }
           fullText += `: ${curr}${item.totalOwed.toFixed(2)}\n`;
         });
@@ -299,9 +319,11 @@ export default function Home() {
     if (isAssigning) {
       const shares = calculateShares(receiptData, instances);
 
-      // Find unassigned items and auto-assign to payer
-      const allAssignedItemIds = new Set(instances.flatMap(i => i.itemIds));
-      const unassignedItems = receiptData.items.filter(item => !allAssignedItemIds.has(item.id));
+      // Find unassigned items that have not had their full quantity claimed
+      const unassignedItems = receiptData.items.filter(item => {
+        const totalClaimed = instances.reduce((sum, inst) => sum + (inst.itemIds[item.id] || 0), 0);
+        return totalClaimed < item.quantity;
+      });
 
       return (
         <div className="w-full px-4 md:px-8 py-8 md:py-16 fade-in">
@@ -370,10 +392,13 @@ export default function Home() {
                       </TableHeader>
                       <TableBody>
                         {receiptData.items.map((item) => {
-                          const assignedTo = instances.filter(i => i.itemIds.includes(item.id));
+                          const itemTotalClaimed = instances.reduce((sum, inst) => sum + (inst.itemIds[item.id] || 0), 0);
                           return (
                             <TableRow key={item.id}>
-                              <TableCell className="font-medium">{item.name}</TableCell>
+                              <TableCell className="font-medium">
+                                 {item.name}
+                                 {item.quantity > 1 && <span className="ml-2 text-[10px] uppercase font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded">Qty: {item.quantity}</span>}
+                              </TableCell>
                               <TableCell className="text-right">
                                 <span className="font-medium">{curr}{item.price.toFixed(2)}</span>
                                 {item.inclusive_price > item.price && (
@@ -385,18 +410,25 @@ export default function Home() {
                               <TableCell>
                                 <div className="flex gap-2 flex-wrap justify-center">
                                   {instances.map(inst => {
-                                    const isSelected = inst.itemIds.includes(item.id);
+                                    const claimedCount = inst.itemIds[item.id] || 0;
                                     return (
-                                      <button
-                                        key={inst.id}
-                                        onClick={() => toggleItemAssignment(inst.id, item.id)}
-                                        className={`text-xs px-2 py-1 rounded-full border transition-all ${isSelected
-                                          ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                                          : 'bg-background text-muted-foreground border-input hover:border-primary/50 hover:bg-primary/10'
-                                          }`}
-                                      >
-                                        {inst.name.split(' ')[0]}
-                                      </button>
+                                        <div key={inst.id} className={`flex items-center p-1 rounded-md border transition-all ${claimedCount > 0 ? 'bg-primary/5 border-primary shadow-sm' : 'bg-background border-transparent hover:border-input'}`}>
+                                            <button 
+                                                onClick={() => {
+                                                    const remainingQty = Math.max(0, item.quantity - itemTotalClaimed);
+                                                    if (remainingQty > 0) updateItemAssignment(inst.id, item.id, remainingQty);
+                                                }}
+                                                className="text-sm font-semibold px-2 py-1 hover:bg-muted/50 rounded-sm transition-colors"
+                                                title="Assign remaining quantities"
+                                            >
+                                                {inst.name.split(' ')[0]}
+                                            </button>
+                                            <div className="flex items-center bg-background rounded-sm border shadow-sm ml-2">
+                                                <button onClick={() => updateItemAssignment(inst.id, item.id, -1)} className="px-3 py-1.5 text-base font-bold text-muted-foreground hover:bg-muted hover:text-foreground rounded-l-sm transition-colors" disabled={claimedCount === 0}>-</button>
+                                                <span className={`px-2 text-sm font-extrabold tabular-nums border-x min-w-[2rem] text-center ${claimedCount > 0 ? 'text-primary' : 'text-muted-foreground'}`}>{claimedCount}</span>
+                                                <button onClick={() => updateItemAssignment(inst.id, item.id, 1)} className="px-3 py-1.5 text-base font-bold text-muted-foreground hover:bg-muted hover:text-foreground rounded-r-sm transition-colors">+</button>
+                                            </div>
+                                        </div>
                                     )
                                   })}
                                 </div>
@@ -445,11 +477,15 @@ export default function Home() {
                             <div key={item.id} className="flex justify-between items-start">
                               <span className="text-muted-foreground pr-2 text-xs font-medium leading-tight">
                                 {item.name} 
-                                {item.sharedCount > 1 && (
+                                {item.sharedCount > 1 && item.claimedCount < item.sharedCount ? (
                                   <span className="text-[9px] bg-primary/10 text-primary border border-primary/20 px-1 py-0.5 rounded ml-1.5 font-bold tracking-tight inline-block translate-y-[-1px]">
-                                    1/{item.sharedCount} share
+                                    {item.claimedCount}/{item.sharedCount} share
                                   </span>
-                                )}
+                                ) : item.claimedCount > 1 ? (
+                                  <span className="text-[9px] bg-muted/50 text-muted-foreground border border-muted-foreground/20 px-1 py-0.5 rounded ml-1.5 font-bold tracking-tight inline-block translate-y-[-1px]">
+                                    Qty: {item.claimedCount}
+                                  </span>
+                                ) : null}
                               </span>
                               <span className="font-semibold text-xs tabular-nums shrink-0">
                                 {curr}{item.totalOwed.toFixed(2)}
@@ -499,8 +535,10 @@ export default function Home() {
                   <Table className="min-w-[600px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[60%]">Item Name</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
+                        <TableHead className="w-[45%]">Item Name</TableHead>
+                        <TableHead className="w-16 text-center">Qty</TableHead>
+                        <TableHead className="w-24 text-right">Unit {curr}</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
                         <TableHead className="w-[50px]"></TableHead>
                       </TableRow>
                     </TableHeader>
@@ -527,20 +565,31 @@ export default function Home() {
                               ))}
                             </div>
                           </TableCell>
-                          <TableCell className="p-3 align-top pt-4 w-32">
-                            <div className="flex flex-col items-end">
-                              <div className="flex items-center justify-end w-full">
-                                <span className="text-sm text-muted-foreground mr-1">{curr}</span>
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  value={item.price || ""}
-                                  onChange={(e) => handleUpdateItem(item.id, "price", e.target.value)}
-                                  className="h-9 shadow-none text-right w-full font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
-                                />
-                              </div>
+                          <TableCell className="p-3 align-top pt-4 text-center">
+                            <Input
+                              type="number"
+                              min="1"
+                              value={item.quantity || 1}
+                              onChange={(e) => handleUpdateItem(item.id, "quantity", e.target.value)}
+                              className="h-8 shadow-none text-center font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent px-1"
+                            />
+                          </TableCell>
+                          
+                          <TableCell className="p-3 align-top pt-4">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={item.unit_price || ""}
+                              onChange={(e) => handleUpdateItem(item.id, "unit_price", e.target.value)}
+                              className="h-8 shadow-none text-right font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent px-1"
+                            />
+                          </TableCell>
+
+                          <TableCell className="p-3 align-top pt-4 w-28">
+                            <div className="flex flex-col items-end justify-start h-full mt-1.5">
+                              <span className="font-bold text-sm flex items-center">{curr}{(item.price || 0).toFixed(2)}</span>
                               {item.inclusive_price > item.price && (
-                                <div className="text-xs text-muted-foreground pr-3 mt-1 font-semibold flex items-center bg-secondary/10 px-2 py-0.5 rounded">
+                                <div className="text-[10px] text-muted-foreground mt-1.5 font-semibold flex items-center bg-secondary/10 px-1.5 py-0.5 rounded whitespace-nowrap">
                                   Incl: {curr}{item.inclusive_price.toFixed(2)}
                                 </div>
                               )}
@@ -559,7 +608,7 @@ export default function Home() {
                         </TableRow>
                       ))}
                       <TableRow>
-                        <TableCell colSpan={3} className="p-2 text-center">
+                        <TableCell colSpan={5} className="p-2 text-center">
                           <Button variant="ghost" size="sm" onClick={handleAddBlankItem} className="text-secondary hover:text-secondary hover:bg-secondary/10 w-full border border-dashed border-secondary/50">
                             + Add Item
                           </Button>
