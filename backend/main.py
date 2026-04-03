@@ -53,19 +53,25 @@ class Tax(BaseModel):
     name: str = Field(description="Tax name or code (e.g., 'Tax A', 'State Tax')")
     amount: float = Field(description="Total monetary amount of this specific tax across the receipt")
 
+class Discount(BaseModel):
+    name: str = Field(description="Discount name, promotional code, or coupon identifier")
+    amount: float = Field(description="Total monetary amount deducted by this specific discount")
+
 class Item(BaseModel):
     id: str = Field(description="A unique string identifier for the item (e.g. '1', '2')", default="")
     name: str = Field(description="The name of the item on the receipt", default="")
     quantity: int = Field(description="The quantity explicitly listed. If not listed, assume 1.", default=1)
     unit_price: float = Field(description="The price of a single unit of this item.", default=0.0)
     price: float = Field(description="The total pre-tax original price of the item line (quantity * unit_price)", default=0.0)
-    inclusive_price: float = Field(description="The final price of the item line including its specific applied taxes", default=0.0)
+    inclusive_price: float = Field(description="The final price of the item line including its specific applied taxes and applied discounts", default=0.0)
     applied_taxes: List[str] = Field(description="List of tax names/codes applied to this item", default_factory=list)
+    applied_discounts: List[str] = Field(description="List of discount names applied to this item", default_factory=list)
 
 class ReceiptData(BaseModel):
     error: str = Field(description="ONLY populate this with 'INVALID_RECEIPT' if the image is NOT a receipt, bill or invoice.", default="")
     items: List[Item] = Field(description="List of items extracted from the receipt.", default_factory=list)
     taxes: List[Tax] = Field(description="List of specific individual taxes found on the receipt.", default_factory=list)
+    discounts: List[Discount] = Field(description="List of individual discounts or coupons reducing the total.", default_factory=list)
     scraped_total: float = Field(description="The final total amount printed on the receipt.", default=0.0)
 
 @app.get("/")
@@ -131,8 +137,8 @@ async def process_receipt(request: Request, files: List[UploadFile] = File(...))
         Analyze the images combined and extract the requested information exactly.
         If the receipt uses cryptic abbreviations for items (common in supermarkets like Walmart or Costco), decode the product's actual name to the best of your ability and append it in brackets. Example: "GTD ORG [Gatorade Orange]".
         Strictly extract the `quantity` of each item. If not explicitly listed, assume it is 1. Extract the `unit_price` of a single item. The total `price` MUST EXACTLY equal (`quantity` * `unit_price`).
-        Ignore any tip amount in the items list, but extract the taxes and total accurately.
-        Look for tax indicator codes (e.g. 'A', 'B', 'T') next to items, match them to the tax summaries at the bottom, and apply them. Calculate the `inclusive_price` (Base Price + Specific Applied Taxes). If no tax is explicitly indicated for an item, but there is a general tax, apply it if it makes sense contextually or leave empty. Return a strict list of applied taxes per item.
+        Extract the taxes, any generic discounts/promotions, and the final total accurately.
+        Look for tax or discount indicator codes next to items, match them to the summaries at the bottom, and apply them. Calculate the `inclusive_price` (Base Price + Specific Applied Taxes - Specific Applied Discounts). Return strict lists of applied taxes and applied discounts per item. If a tax or discount applies to the entire bill globally with no specific item mapped to it, extract it to the global list but leave its applied lists empty on the items.
         """
         
         models_to_try = ['gemini-3.1-flash-lite-preview']
@@ -176,6 +182,18 @@ async def process_receipt(request: Request, files: List[UploadFile] = File(...))
             if "error" in parsed_data and parsed_data["error"] == "INVALID_RECEIPT":
                 raise HTTPException(status_code=400, detail="The uploaded image does not appear to be a receipt or bill. Please upload a valid receipt.")
                 
+            # Mathematical enforce to override LLM hallucinations
+            if "items" in parsed_data:
+                for item in parsed_data["items"]:
+                    qty = item.get("quantity", 1)
+                    up = item.get("unit_price", item.get("price", 0.0))
+                    # Fallback mapping: if unit_price is 0 but price is real, it failed.
+                    if up == 0.0 and item.get("price", 0.0) > 0:
+                        up = item.get("price", 0.0) / qty
+                        item["unit_price"] = up
+                    
+                    item["price"] = round(qty * up, 2)
+
             return ReceiptData(**parsed_data)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON from Gemini: {result.text}")

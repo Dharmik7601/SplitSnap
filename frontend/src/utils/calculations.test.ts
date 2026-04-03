@@ -7,10 +7,11 @@ describe('calculateShares', () => {
         const receiptData: ReceiptData = {
             error: "",
             items: [
-                { id: '1', name: 'Pizza', quantity: 1, unit_price: 20, price: 20, inclusive_price: 22, applied_taxes: ['VAT'] },
-                { id: '2', name: 'Drinks', quantity: 1, unit_price: 10, price: 10, inclusive_price: 11, applied_taxes: ['VAT'] }
+                { id: '1', name: 'Pizza', quantity: 1, unit_price: 20, price: 20, inclusive_price: 22, applied_taxes: ['VAT'], applied_discounts: [] },
+                { id: '2', name: 'Drinks', quantity: 1, unit_price: 10, price: 10, inclusive_price: 11, applied_taxes: ['VAT'], applied_discounts: [] }
             ],
-            taxes: [{ name: 'VAT', amount: 3 }], // 10% tax (3 / 30 subtotal)
+            taxes: [{ name: 'VAT', amount: 3 }],
+            discounts: [],
             scraped_total: 33
         }
 
@@ -43,9 +44,10 @@ describe('calculateShares', () => {
         const receiptData: ReceiptData = {
             error: "",
             items: [
-                { id: '1', name: 'Salad', quantity: 1, unit_price: 15, price: 15, inclusive_price: 15, applied_taxes: [] },
+                { id: '1', name: 'Salad', quantity: 1, unit_price: 15, price: 15, inclusive_price: 15, applied_taxes: [], applied_discounts: [] },
             ],
             taxes: [],
+            discounts: [],
             scraped_total: 15
         }
         const instances: SplitInstance[] = [
@@ -61,10 +63,11 @@ describe('calculateShares', () => {
         const receiptData: ReceiptData = {
             error: "",
             items: [
-                { id: '1', name: 'Garlic Cloves', quantity: 3, unit_price: 3, price: 9, inclusive_price: 9, applied_taxes: [] },
-                { id: '2', name: 'Milk', quantity: 1, unit_price: 5, price: 5, inclusive_price: 5, applied_taxes: [] }
+                { id: '1', name: 'Garlic Cloves', quantity: 3, unit_price: 3, price: 9, inclusive_price: 9, applied_taxes: [], applied_discounts: [] },
+                { id: '2', name: 'Milk', quantity: 1, unit_price: 5, price: 5, inclusive_price: 5, applied_taxes: [], applied_discounts: [] }
             ],
             taxes: [],
+            discounts: [],
             scraped_total: 14
         }
 
@@ -97,6 +100,42 @@ describe('calculateShares', () => {
         expect(aliceMilk.sharedCount).toBe(1)
         expect(aliceMilk.fraction).toBe(1)
     })
+
+    test('distributes unmapped global taxes and discounts equally bypassing subtotal modifiers', () => {
+        const receiptData: ReceiptData = {
+            error: "",
+            items: [
+                { id: '1', name: 'Meal', quantity: 1, unit_price: 10, price: 10, inclusive_price: 10, applied_taxes: [], applied_discounts: [] },
+            ],
+            taxes: [
+                { name: 'Service Fee', amount: 30 } // No longer explicitly flagged, relies on missing 'items' mapping
+            ],
+            discounts: [
+                { name: 'Promo', amount: 15 } // Flat minus
+            ],
+            scraped_total: 25
+        }
+
+        const instances: SplitInstance[] = [
+            { id: 'alice', name: 'Alice', itemIds: { '1': 1 } },
+            { id: 'bob', name: 'Bob', itemIds: {} },
+            { id: 'charlie', name: 'Charlie', itemIds: {} }
+        ]
+
+        const shares = calculateShares(receiptData, instances)
+        
+        // $30 tax evenly divided by 3 people = $10 tax flat added to all.
+        // $15 discount evenly divided by 3 people = $5 discount flat subtracted from all limit 0.
+        
+        expect(shares.find(s => s.id === 'alice')!.taxOwed).toBe(10)
+        expect(shares.find(s => s.id === 'alice')!.totalOwed).toBe(15) // 10 Base + 10 tax - 5 discount
+        
+        expect(shares.find(s => s.id === 'bob')!.taxOwed).toBe(10)
+        expect(shares.find(s => s.id === 'bob')!.totalOwed).toBe(5) // 0 Base + 10 tax - 5 discount
+
+        expect(shares.find(s => s.id === 'charlie')!.taxOwed).toBe(10)
+        expect(shares.find(s => s.id === 'charlie')!.totalOwed).toBe(5) // 0 Base + 10 tax - 5 discount
+    })
 })
 
 describe('recalculateInclusivePrices', () => {
@@ -104,13 +143,14 @@ describe('recalculateInclusivePrices', () => {
         const payload: ReceiptData = {
             error: "",
             items: [
-                { id: '1', name: 'Taxed Item', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['City Tax'] },
-                { id: '2', name: 'Non-Taxed Item', quantity: 1, unit_price: 50, price: 50, inclusive_price: 50, applied_taxes: [] },
-                { id: '3', name: 'Another Taxed', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['City Tax'] }
+                { id: '1', name: 'Taxed Item', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['City Tax'], applied_discounts: [] },
+                { id: '2', name: 'Non-Taxed Item', quantity: 1, unit_price: 50, price: 50, inclusive_price: 50, applied_taxes: [], applied_discounts: [] },
+                { id: '3', name: 'Another Taxed', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['City Tax'], applied_discounts: [] }
             ],
             taxes: [
                 { name: 'City Tax', amount: 20 }
             ],
+            discounts: [],
             scraped_total: 270
         };
 
@@ -126,13 +166,14 @@ describe('recalculateInclusivePrices', () => {
         const payload: ReceiptData = {
             error: "",
             items: [
-                { id: '1', name: 'Luxury Wine', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['VAT', 'Liquor Tax'] },
-                { id: '2', name: 'Bread', quantity: 1, unit_price: 10, price: 10, inclusive_price: 10, applied_taxes: [] }
+                { id: '1', name: 'Luxury Wine', quantity: 1, unit_price: 100, price: 100, inclusive_price: 100, applied_taxes: ['VAT', 'Liquor Tax'], applied_discounts: [] },
+                { id: '2', name: 'Bread', quantity: 1, unit_price: 10, price: 10, inclusive_price: 10, applied_taxes: [], applied_discounts: [] }
             ],
             taxes: [
                 { name: 'VAT', amount: 5 }, // 5% rate on the $100 base
                 { name: 'Liquor Tax', amount: 15 } // 15% rate on the $100 base
             ],
+            discounts: [],
             scraped_total: 130
         };
 

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { UploadCloud, FileText, ChevronRight, Loader2, RefreshCcw, Trash2, ArrowRight, AlertTriangle, CheckCircle2, Copy, Check } from "lucide-react"
+import { UploadCloud, FileText, ChevronRight, Loader2, RefreshCcw, Trash2, ArrowRight, AlertTriangle, CheckCircle2, Copy, Check, AlertCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -141,7 +141,7 @@ export default function Home() {
       if (!prev) return prev;
       return {
         ...prev,
-        items: [...prev.items, { id: `new-${Date.now()}`, name: "", quantity: 1, unit_price: 0, price: 0, inclusive_price: 0, applied_taxes: [] }]
+        items: [...prev.items, { id: `new-${Date.now()}`, name: "", quantity: 1, unit_price: 0, price: 0, inclusive_price: 0, applied_taxes: [], applied_discounts: [] }]
       }
     })
   }
@@ -178,14 +178,14 @@ export default function Home() {
       return recalculateInclusivePrices({ ...prev, taxes: newTaxes });
     });
   }
+
   const handleAddManualTax = () => {
     if (!receiptData) return;
-    const customName = prompt("Enter a name for the new tax (e.g. 'City Tax'):");
+    const customName = prompt("Enter a name for the new tax/fee (e.g. 'City Tax'):");
     if (!customName || customName.trim() === "") return;
 
     setReceiptData(prev => {
       if (!prev) return prev;
-      // Prevent duplicates
       if (prev.taxes?.some(t => t.name.toLowerCase() === customName.trim().toLowerCase())) return prev;
 
       const newTaxes = [...(prev.taxes || []), { name: customName.trim(), amount: 0 }];
@@ -199,7 +199,6 @@ export default function Home() {
       if (!prev) return prev;
       const targetTax = prev.taxes[index]?.name;
       const newTaxes = prev.taxes.filter((_, i) => i !== index);
-      // Remove this tax from all items' applied_taxes to clean up seamlessly
       const cleanedItems = prev.items.map(item => ({
         ...item,
         applied_taxes: item.applied_taxes?.filter(t => t !== targetTax) || []
@@ -207,6 +206,68 @@ export default function Home() {
       return recalculateInclusivePrices({ ...prev, taxes: newTaxes, items: cleanedItems });
     });
   }
+
+  const handleToggleItemDiscount = (itemId: string, discountName: string) => {
+    if (!receiptData) return;
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const newData = {
+        ...prev,
+        items: prev.items.map(item => {
+          if (item.id === itemId) {
+            const currentDiscounts = item.applied_discounts || [];
+            const newDiscounts = currentDiscounts.includes(discountName)
+              ? currentDiscounts.filter(d => d !== discountName)
+              : [...currentDiscounts, discountName];
+            return { ...item, applied_discounts: newDiscounts };
+          }
+          return item;
+        })
+      };
+      return recalculateInclusivePrices(newData);
+    });
+  }
+
+  const handleUpdateDiscount = (id: number, val: string) => {
+    if (!receiptData) return;
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const newDiscounts = [...(prev.discounts || [])];
+      if (newDiscounts[id]) {
+        newDiscounts[id].amount = parseFloat(val) || 0;
+      }
+      return recalculateInclusivePrices({ ...prev, discounts: newDiscounts });
+    });
+  }
+
+  const handleAddManualDiscount = () => {
+    if (!receiptData) return;
+    const customName = prompt("Enter a name for the discount (e.g. 'Coupon 20%'):");
+    if (!customName || customName.trim() === "") return;
+
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      if (prev.discounts?.some(d => d.name.toLowerCase() === customName.trim().toLowerCase())) return prev;
+
+      const newDiscounts = [...(prev.discounts || []), { name: customName.trim(), amount: 0 }];
+      return recalculateInclusivePrices({ ...prev, discounts: newDiscounts });
+    });
+  }
+
+  const handleDeleteDiscount = (index: number) => {
+    if (!receiptData) return;
+    setReceiptData(prev => {
+      if (!prev) return prev;
+      const targetDiscount = prev.discounts[index]?.name;
+      const newDiscounts = prev.discounts.filter((_, i) => i !== index);
+      const cleanedItems = prev.items.map(item => ({
+        ...item,
+        applied_discounts: item.applied_discounts?.filter(d => d !== targetDiscount) || []
+      }));
+      return recalculateInclusivePrices({ ...prev, discounts: newDiscounts, items: cleanedItems });
+    });
+  }
+
 
   const handleAddInstance = () => {
     if (!newInstanceName.trim()) return;
@@ -243,7 +304,10 @@ export default function Home() {
 
   const handleCopyShare = (share: ShareResult) => {
     let text = `${share.name}'s Share:\n`;
-    text += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax: ${curr}${share.taxOwed.toFixed(2)}\n`;
+    const discountText = receiptData?.discounts && receiptData.discounts.length > 0
+      ? ` - Discount: ${curr}${(share.discountOwed || 0).toFixed(2)}`
+      : '';
+    text += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax/Fees: ${curr}${share.taxOwed.toFixed(2)}${discountText}\n`;
     text += `Total: ${curr}${share.totalOwed.toFixed(2)}\n\n`;
     
     if (share.itemsBreakdown && share.itemsBreakdown.length > 0) {
@@ -271,7 +335,10 @@ export default function Home() {
     
     shares.forEach(share => {
       fullText += `${share.name}'s Share:\n`;
-      fullText += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax: ${curr}${share.taxOwed.toFixed(2)}\n`;
+      const discountText = receiptData?.discounts && receiptData.discounts.length > 0
+        ? ` - Discount: ${curr}${(share.discountOwed || 0).toFixed(2)}`
+        : '';
+      fullText += `Subtotal: ${curr}${share.subtotalOwed.toFixed(2)} + Tax/Fees: ${curr}${share.taxOwed.toFixed(2)}${discountText}\n`;
       fullText += `Total: ${curr}${share.totalOwed.toFixed(2)}\n`;
       
       if (share.itemsBreakdown && share.itemsBreakdown.length > 0) {
@@ -306,13 +373,14 @@ export default function Home() {
       return;
     }
 
+
     setAssignError(null);
     setIsAssigning(true);
   }
 
   if (receiptData) {
     const calculatedSubtotal = receiptData.items.reduce((sum, item) => sum + item.price, 0);
-    const calculatedTotal = calculatedSubtotal + (receiptData.taxes?.reduce((sum, t) => sum + t.amount, 0) || 0);
+    const calculatedTotal = calculatedSubtotal + (receiptData.taxes?.reduce((sum, t) => sum + t.amount, 0) || 0) - (receiptData.discounts?.reduce((sum, d) => sum + d.amount, 0) || 0);
     const difference = Math.abs(calculatedTotal - receiptData.scraped_total);
     const isMatched = difference < 0.05; // tiny tolerance for float math
 
@@ -371,6 +439,30 @@ export default function Home() {
                   </div>
                 </CardContent>
               </Card>
+
+              <div className={`p-4 rounded-lg border flex flex-col gap-1.5 shadow-sm transition-colors ${Math.abs(calculatedTotal - shares.reduce((sum, s) => sum + s.totalOwed, 0)) < 0.05 ? 'bg-green-500/10 border-green-500/20' : 'bg-destructive/10 border-destructive/20'}`}>
+                {Math.abs(calculatedTotal - shares.reduce((sum, s) => sum + s.totalOwed, 0)) < 0.05 ? (
+                  <>
+                    <div className="flex items-center gap-2 text-green-600">
+                      <Check className="h-4 w-4 shrink-0" />
+                      <h4 className="font-semibold text-sm">Perfect Split</h4>
+                    </div>
+                    <p className="text-xs text-green-600/80">
+                      Assigned shares match calculated total exactly ({curr}{calculatedTotal.toFixed(2)}).
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 text-destructive">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <h4 className="font-semibold text-sm">Mismatch Detected</h4>
+                    </div>
+                    <p className="text-xs text-destructive/80">
+                      Assigned ({curr}{shares.reduce((sum, s) => sum + s.totalOwed, 0).toFixed(2)}) out of ({curr}{calculatedTotal.toFixed(2)}). Please assign remaining items completely.
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Middle Column: Items Checklist */}
@@ -403,7 +495,7 @@ export default function Home() {
                                 <span className="font-medium">{curr}{item.price.toFixed(2)}</span>
                                 {item.inclusive_price > item.price && (
                                   <div className="text-xs text-muted-foreground mt-0.5">
-                                    w/ tax: {curr}{item.inclusive_price.toFixed(2)}
+                                    w/ tax/fees: {curr}{item.inclusive_price.toFixed(2)}
                                   </div>
                                 )}
                               </TableCell>
@@ -421,7 +513,7 @@ export default function Home() {
                                                 className="text-sm font-semibold px-2 py-1 hover:bg-muted/50 rounded-sm transition-colors"
                                                 title="Assign remaining quantities"
                                             >
-                                                {inst.name.split(' ')[0]}
+                                                {inst.name}
                                             </button>
                                             <div className="flex items-center bg-background rounded-sm border shadow-sm ml-2">
                                                 <button onClick={() => updateItemAssignment(inst.id, item.id, -1)} className="px-3 py-1.5 text-base font-bold text-muted-foreground hover:bg-muted hover:text-foreground rounded-l-sm transition-colors" disabled={claimedCount === 0}>-</button>
@@ -460,8 +552,16 @@ export default function Home() {
                             {copiedShareId === share.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </h3>
-                        <p className="text-xs text-muted-foreground">
-                          Subtotal: {curr}{share.subtotalOwed.toFixed(2)} + Tax: {curr}{share.taxOwed.toFixed(2)}
+                        <p className="text-xs text-muted-foreground flex flex-wrap max-w-full truncate">
+                          Subtotal:&nbsp;<span className="font-medium text-foreground">{curr}{share.subtotalOwed.toFixed(2)}</span>
+                          <span className="mx-1 text-muted-foreground/50">|</span> 
+                          Tax/Fees:&nbsp;<span className="font-medium text-foreground">{curr}{share.taxOwed.toFixed(2)}</span>
+                          {(receiptData.discounts && receiptData.discounts.length > 0) && (
+                            <>
+                              <span className="mx-1 text-muted-foreground/50">|</span> 
+                              Discount:&nbsp;<span className="font-medium text-green-600">-{curr}{(share.discountOwed || 0).toFixed(2)}</span>
+                            </>
+                          )}
                         </p>
                       </div>
                       <div className="text-2xl font-extrabold flex items-start text-secondary">
@@ -498,6 +598,20 @@ export default function Home() {
                   </Card>
                 ))}
               </div>
+              
+              {unassignedItems.length === 0 && Math.abs(calculatedTotal - shares.reduce((sum, s) => sum + s.totalOwed, 0)) > 0.05 && (
+                  <div className="mb-4 bg-destructive/10 border-l-4 border-destructive p-4 rounded-r-md flex items-start gap-3 shadow-sm fade-in mt-4">
+                    <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                    <div>
+                      <h4 className="font-semibold text-destructive">Mathematical Mismatch Detected</h4>
+                      <p className="text-sm text-destructive/80 mt-1">
+                        All items are assigned, but the sum of everyone's split shares ({curr}{shares.reduce((sum, s) => sum + s.totalOwed, 0).toFixed(2)}) 
+                        does not perfectly match the calculated receipt total ({curr}{calculatedTotal.toFixed(2)}). 
+                        This is usually caused by unmapped taxes not set to divide equally, or manual overrides.
+                      </p>
+                    </div>
+                  </div>
+              )}
 
               {unassignedItems.length > 0 && (
                 <div className="bg-destructive/10 text-destructive text-sm p-4 rounded-xl border border-destructive/20 mt-4 font-medium flex gap-2">
@@ -552,7 +666,7 @@ export default function Home() {
                               className="h-8 shadow-none font-medium focus-visible:ring-1 border-transparent hover:border-input focus-visible:border-input bg-transparent"
                             />
                             <div className="px-3 pb-2 flex flex-wrap gap-2 items-center mt-2">
-                              <span className="text-xs font-semibold text-muted-foreground mr-1">Taxes:</span>
+                              <span className="text-xs font-semibold text-muted-foreground mr-1">Taxes/Fees:</span>
                               {item.applied_taxes?.map(tax => (
                                 <button key={tax} onClick={() => handleToggleItemTax(item.id, tax)} className="px-2 py-1 rounded text-xs bg-primary/20 text-primary font-bold hover:bg-destructive/20 hover:text-destructive hover:line-through shadow-sm transition-all">
                                   {tax}
@@ -561,6 +675,18 @@ export default function Home() {
                               {receiptData.taxes?.filter(t => !item.applied_taxes?.includes(t.name)).map(tax => (
                                 <button key={tax.name} onClick={() => handleToggleItemTax(item.id, tax.name)} className="px-2 py-1 rounded text-xs bg-secondary/10 text-secondary font-medium border border-secondary/20 hover:bg-secondary/30 transition-all">
                                   + {tax.name}
+                                </button>
+                              ))}
+                              <div className="w-full h-0"></div>
+                              <span className="text-xs font-semibold text-muted-foreground mr-1">Discounts:</span>
+                              {item.applied_discounts?.map(discount => (
+                                <button key={discount} onClick={() => handleToggleItemDiscount(item.id, discount)} className="px-2 py-1 rounded text-xs bg-primary/20 text-primary font-bold hover:bg-destructive/20 hover:text-destructive hover:line-through shadow-sm transition-all">
+                                  {discount}
+                                </button>
+                              ))}
+                              {receiptData.discounts?.filter(d => !item.applied_discounts?.includes(d.name)).map(discount => (
+                                <button key={discount.name} onClick={() => handleToggleItemDiscount(item.id, discount.name)} className="px-2 py-1 rounded text-xs bg-secondary/10 text-secondary font-medium border border-secondary/20 hover:bg-secondary/30 transition-all">
+                                  + {discount.name}
                                 </button>
                               ))}
                             </div>
@@ -587,9 +713,17 @@ export default function Home() {
 
                           <TableCell className="p-3 align-top pt-4 w-28">
                             <div className="flex flex-col items-end justify-start h-full mt-1.5">
-                              <span className="font-bold text-sm flex items-center">{curr}{(item.price || 0).toFixed(2)}</span>
-                              {item.inclusive_price > item.price && (
-                                <div className="text-[10px] text-muted-foreground mt-1.5 font-semibold flex items-center bg-secondary/10 px-1.5 py-0.5 rounded whitespace-nowrap">
+                              {item.discounted_price !== undefined && item.discounted_price < item.price ? (
+                                <>
+                                  <span className="font-bold text-[10px] flex items-center line-through text-muted-foreground mr-1">{curr}{(item.price || 0).toFixed(2)}</span>
+                                  <span className="font-bold text-sm flex items-center text-primary">{curr}{(item.discounted_price).toFixed(2)}</span>
+                                </>
+                              ) : (
+                                <span className="font-bold text-sm flex items-center">{curr}{(item.price || 0).toFixed(2)}</span>
+                              )}
+                              
+                              {item.inclusive_price > (item.discounted_price ?? item.price) && (
+                                <div className="text-[10px] text-muted-foreground mt-1.5 font-semibold flex items-center bg-secondary/10 px-1.5 py-0.5 rounded whitespace-nowrap overflow-hidden text-ellipsis max-w-full">
                                   Incl: {curr}{item.inclusive_price.toFixed(2)}
                                 </div>
                               )}
@@ -632,30 +766,82 @@ export default function Home() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-3">
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Taxes Applied</Label>
-                  {receiptData.taxes && receiptData.taxes.map((tax, idx) => (
-                    <div key={idx} className="flex justify-between items-center bg-muted/20 p-2 rounded-md border gap-2">
-                      <span className="text-sm font-medium truncate flex-1">{tax.name}</span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-sm font-semibold">{curr}</span>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={tax.amount || ""}
-                          onChange={(e) => handleUpdateTax(idx, e.target.value)}
-                          className="h-7 w-20 text-right bg-background border-input shadow-sm"
-                        />
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteTax(idx)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Taxes/Fees Applied</Label>
+                  {receiptData.taxes && receiptData.taxes.map((tax, idx) => {
+                    const isAppliedToItems = receiptData.items.some(i => i.applied_taxes?.includes(tax.name));
+                    return (
+                        <div key={idx} className="flex flex-col bg-muted/20 p-2 rounded-md border gap-2">
+                           <div className="flex justify-between items-center w-full">
+                               <span className="text-sm font-medium truncate flex-1">{tax.name}</span>
+                               <div className="flex items-center gap-1 shrink-0">
+                                   <span className="text-sm font-semibold">{curr}</span>
+                                   <Input
+                                       type="number"
+                                       step="0.01"
+                                       value={tax.amount || ""}
+                                       onChange={(e) => handleUpdateTax(idx, e.target.value)}
+                                       className="h-7 w-20 text-right bg-background border-input shadow-sm"
+                                   />
+                                   <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteTax(idx)}>
+                                       <Trash2 className="h-3 w-3" />
+                                   </Button>
+                               </div>
+                           </div>
+                           <div className="bg-background border rounded px-2 py-1.5 flex items-center justify-center min-h-[30px]">
+                               {isAppliedToItems ? (
+                                   <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Applied to specific items</span>
+                               ) : (
+                                   <span className="text-[10px] text-primary font-bold uppercase tracking-wide">Divided equally among all people</span>
+                               )}
+                           </div>
+                        </div>
+                    )
+                  })}
                   {(!receiptData.taxes || receiptData.taxes.length === 0) && (
-                    <div className="text-sm text-muted-foreground">No taxes detected.</div>
+                    <div className="text-sm text-muted-foreground">No taxes/fees detected.</div>
                   )}
                   <Button variant="outline" size="sm" onClick={handleAddManualTax} className="w-full mt-2 text-xs border-dashed">
-                    + Add New Tax
+                    + Add New Tax/Fee
+                  </Button>
+                </div>
+
+                <div className="space-y-3 pt-4 border-t">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Discounts / Promotions</Label>
+                  {receiptData.discounts && receiptData.discounts.map((discount, idx) => {
+                    const isAppliedToItems = receiptData.items.some(i => i.applied_discounts?.includes(discount.name));
+                    return (
+                        <div key={idx} className="flex flex-col bg-muted/20 p-2 rounded-md border gap-2">
+                           <div className="flex justify-between items-center w-full">
+                               <span className="text-sm font-medium truncate flex-1">{discount.name}</span>
+                               <div className="flex items-center gap-1 shrink-0">
+                                   <span className="text-sm font-semibold">{curr}</span>
+                                   <Input
+                                       type="number"
+                                       step="0.01"
+                                       value={discount.amount || ""}
+                                       onChange={(e) => handleUpdateDiscount(idx, e.target.value)}
+                                       className="h-7 w-20 text-right bg-background border-input shadow-sm"
+                                   />
+                                   <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteDiscount(idx)}>
+                                       <Trash2 className="h-3 w-3" />
+                                   </Button>
+                               </div>
+                           </div>
+                           <div className="bg-background border rounded px-2 py-1.5 flex items-center justify-center min-h-[30px]">
+                               {isAppliedToItems ? (
+                                   <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Applied to specific items</span>
+                               ) : (
+                                   <span className="text-[10px] text-primary font-bold uppercase tracking-wide">Divided equally among all people</span>
+                               )}
+                           </div>
+                        </div>
+                    )
+                  })}
+                  {(!receiptData.discounts || receiptData.discounts.length === 0) && (
+                    <div className="text-sm text-muted-foreground">No discounts detected.</div>
+                  )}
+                  <Button variant="outline" size="sm" onClick={handleAddManualDiscount} className="w-full mt-2 text-xs border-dashed">
+                    + Add New Discount
                   </Button>
                 </div>
 
@@ -733,7 +919,7 @@ export default function Home() {
         <CardHeader className="text-center pb-4">
           <CardTitle className="text-2xl">Upload Receipt</CardTitle>
           <CardDescription>
-            Select a clear photo of your total bill showing the items and tax.
+            Select a clear photo of your total bill showing the items and tax/fees.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-6">

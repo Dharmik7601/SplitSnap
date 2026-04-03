@@ -20,6 +20,7 @@ export interface ShareResult extends SplitInstance {
     itemsBreakdown: SharedItemBreakdown[];
     subtotalOwed: number;
     taxOwed: number;
+    discountOwed: number;
     totalOwed: number;
 }
 
@@ -28,6 +29,8 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
 
     return instances.map(inst => {
         let instanceSubtotal = 0;
+        let instanceTax = 0;
+        let instanceDiscount = 0;
         let instanceTotal = 0;
         const itemsBreakdown: SharedItemBreakdown[] = [];
 
@@ -37,20 +40,20 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
 
             const item = receiptData.items.find((i: Item) => i.id === itemId);
             if (item) {
-                // Find how many total pieces/shares of this item are claimed mathematically across all instances
                 const totalClaimedQuantity = instances.reduce((sum, currentInst) => {
                     return sum + (currentInst.itemIds[itemId] || 0);
                 }, 0);
 
                 const fraction = claimedQuantity / (totalClaimedQuantity || 1);
                 
-                const itemSubtotal = item.price * fraction;
-                const itemTotal = (item.inclusive_price || item.price) * fraction;
+                const itemBaseSubtotal = item.price * fraction;
+                const itemDiscount = (item.price - (item.discounted_price ?? item.price)) * fraction;
+                const itemTax = (item.inclusive_price - (item.discounted_price ?? item.price)) * fraction;
+                const itemTotal = itemBaseSubtotal - itemDiscount + itemTax;
 
-                // Add the strict fraction of base price
-                instanceSubtotal += itemSubtotal;
-
-                // Add the strict fraction of the inclusive price
+                instanceSubtotal += itemBaseSubtotal;
+                instanceDiscount += itemDiscount;
+                instanceTax += itemTax;
                 instanceTotal += itemTotal;
 
                 itemsBreakdown.push({
@@ -59,30 +62,60 @@ export const calculateShares = (receiptData: ReceiptData | null, instances: Spli
                     fraction,
                     claimedCount: claimedQuantity,
                     sharedCount: totalClaimedQuantity,
-                    subtotalOwed: itemSubtotal,
+                    subtotalOwed: itemBaseSubtotal,
                     totalOwed: itemTotal
                 });
             }
         });
 
-        const instanceTax = instanceTotal - instanceSubtotal;
+        let flatEqualTax = 0;
+        receiptData.taxes?.forEach(tax => {
+            const isMapped = receiptData.items.some(i => i.applied_taxes?.includes(tax.name));
+            if (!isMapped) {
+                flatEqualTax += (tax.amount / (instances.length || 1));
+            }
+        });
+
+        let flatEqualDiscount = 0;
+        receiptData.discounts?.forEach(discount => {
+            const isMapped = receiptData.items.some(i => i.applied_discounts?.includes(discount.name));
+            if (!isMapped) {
+                flatEqualDiscount += (discount.amount / (instances.length || 1));
+            }
+        });
+
+        const finalTaxForInstance = instanceTax + flatEqualTax;
+        const finalDiscountForInstance = instanceDiscount + flatEqualDiscount;
+        const finalTotalForInstance = instanceSubtotal - finalDiscountForInstance + finalTaxForInstance;
 
         return {
             ...inst,
             itemsBreakdown,
             subtotalOwed: instanceSubtotal,
-            taxOwed: Math.max(0, instanceTax),
-            totalOwed: instanceTotal
+            taxOwed: finalTaxForInstance,
+            discountOwed: finalDiscountForInstance,
+            totalOwed: Math.max(0, finalTotalForInstance)
         }
     })
 }
 
 export const recalculateInclusivePrices = (data: ReceiptData): ReceiptData => {
-    // Calculate effective percentage rate for each specific tax
+    // Calculate effective percentage rate for each specific tax, ignoring unmapped global taxes
     const taxRates: Record<string, number> = {};
     data.taxes?.forEach(tax => {
+        const isMapped = data.items.some(i => i.applied_taxes?.includes(tax.name));
+        if (!isMapped) return;
         const totalBaseOfTaggedItems = data.items.filter(i => i.applied_taxes?.includes(tax.name)).reduce((sum, i) => sum + i.price, 0);
         taxRates[tax.name] = totalBaseOfTaggedItems > 0 ? (tax.amount / totalBaseOfTaggedItems) : 0;
+    });
+
+    // Calculate effective percentage rate for each specific discount, ignoring unmapped global discounts
+    const discountRates: Record<string, number> = {};
+    data.discounts?.forEach(discount => {
+        const isMapped = data.items.some(i => i.applied_discounts?.includes(discount.name));
+        if (!isMapped) return;
+        const totalBaseOfTaggedItems = data.items.filter(i => i.applied_discounts?.includes(discount.name)).reduce((sum, i) => sum + i.price, 0);
+        discountRates[discount.name] = totalBaseOfTaggedItems > 0 ? (discount.amount / totalBaseOfTaggedItems) : 0;
     });
 
     return {
@@ -94,9 +127,25 @@ export const recalculateInclusivePrices = (data: ReceiptData): ReceiptData => {
                     taxMultiplier += taxRates[taxName];
                 }
             });
+
+            let discountMultiplier = 0;
+            item.applied_discounts?.forEach(discountName => {
+                if (discountRates[discountName]) {
+                    discountMultiplier += discountRates[discountName];
+                }
+            });
+
+            // Map absolute offsets mathematically to exactly reconstruct bounded constraints
+            const absoluteTaxContribution = item.price * (taxMultiplier - 1);
+            const absoluteDiscountContribution = item.price * discountMultiplier;
+            
+            const discountedPrice = Math.max(0, item.price - absoluteDiscountContribution);
+            const inclusive = Math.max(0, discountedPrice + absoluteTaxContribution);
+
             return {
                 ...item,
-                inclusive_price: item.price * taxMultiplier
+                discounted_price: discountedPrice,
+                inclusive_price: inclusive
             };
         })
     };
